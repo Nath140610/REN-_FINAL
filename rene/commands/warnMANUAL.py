@@ -17,7 +17,7 @@ def _can_moderate(interaction: discord.Interaction) -> bool:
 
 
 @app_commands.command(
-    name="warn",
+    name="warnmanual",
     description="Ajouter un avertissement à un membre.",
 )
 @app_commands.describe(
