@@ -163,12 +163,28 @@ DEFAULT_ALLOWED_DOMAINS = {
     "cdn.discordapp.com",
     "media.discordapp.net",
     "tenor.com",
+    "tenor.co",
     "giphy.com",
+    "gph.is",
+    "imgur.com",
     "tiktok.com",
     "x.com",
     "twitter.com",
     "instagram.com",
     "twitch.tv",
+}
+
+# Les GIFs de ces services ne doivent JAMAIS être considérés comme
+# de la publicité. Les sous-domaines sont acceptés automatiquement
+# (ex. media.tenor.com, media.giphy.com, i.imgur.com).
+GIF_ALLOWED_DOMAINS = {
+    "tenor.com",
+    "tenor.co",
+    "giphy.com",
+    "gph.is",
+    "imgur.com",
+    "cdn.discordapp.com",
+    "media.discordapp.net",
 }
 
 URL_PATTERN = re.compile(
@@ -280,6 +296,34 @@ def domain_is_allowed(domain: str, allowed_domains: set[str]) -> bool:
     )
 
 
+def is_safe_gif_url(url: str) -> bool:
+    """
+    Retourne True pour les GIFs / services de GIF connus.
+
+    Important :
+    - Tenor / Giphy / Imgur sont acceptés même si leur URL ne finit pas
+      directement par .gif (leurs liens de partage utilisent souvent /view/).
+    - Les médias Discord sont acceptés.
+    - Un lien publicitaire normal reste contrôlé, même s'il est envoyé dans
+      le même message qu'un GIF.
+    """
+    domain = normalize_domain(url)
+
+    if not domain:
+        return False
+
+    if domain_is_allowed(domain, GIF_ALLOWED_DOMAINS):
+        return True
+
+    # Petit filet de sécurité pour une URL qui pointe réellement vers
+    # un fichier GIF sur un domaine déjà autorisé.
+    candidate = url if "://" in url else f"https://{url}"
+    parsed = urlparse(candidate)
+    path = (parsed.path or "").lower()
+
+    return path.endswith((".gif", ".gifv"))
+
+
 def classify_links(
     text: str,
     allowed_domains: set[str],
@@ -289,12 +333,18 @@ def classify_links(
     if not urls:
         return True, "Aucun lien détecté."
 
+    # Une invitation vers un autre serveur Discord reste interdite.
     if DISCORD_INVITE_PATTERN.search(text):
         return False, "Invitation Discord détectée."
 
     blocked_domains: list[str] = []
+    gif_count = 0
 
     for url in urls:
+        if is_safe_gif_url(url):
+            gif_count += 1
+            continue
+
         domain = normalize_domain(url)
 
         if not domain or not domain_is_allowed(domain, allowed_domains):
@@ -305,6 +355,12 @@ def classify_links(
             "Domaine non autorisé : "
             + ", ".join(f"`{domain}`" for domain in blocked_domains[:4])
         )
+
+    if gif_count == len(urls):
+        return True, "GIF autorisé — aucun avertissement."
+
+    if gif_count:
+        return True, "GIF autorisé et autres liens conformes."
 
     return True, "Le lien appartient à un domaine autorisé."
 
@@ -2417,10 +2473,17 @@ async def inspect_links(message: discord.Message) -> str:
 
     await asyncio.sleep(1)
 
-    allowed_domains = {
+    # IMPORTANT :
+    # On garde TOUJOURS les domaines sûrs fournis par René, même si une
+    # ancienne sauvegarde /config contient une ancienne liste de domaines.
+    # Cela évite qu'un vieux config.json rebloque Tenor/Giphy après une mise
+    # à jour du bot.
+    configured_domains = {
         str(domain).lower()
-        for domain in config.get("allowed_domains", DEFAULT_ALLOWED_DOMAINS)
+        for domain in config.get("allowed_domains", [])
     }
+    allowed_domains = set(DEFAULT_ALLOWED_DOMAINS) | configured_domains
+
     allowed, reason = classify_links(message.content, allowed_domains)
 
     if allowed:
@@ -2537,4 +2600,3 @@ async def inspect_links(message: discord.Message) -> str:
 # ============================================================
 # LANCEMENT
 # ============================================================
-
